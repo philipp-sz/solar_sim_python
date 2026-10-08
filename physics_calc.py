@@ -84,7 +84,7 @@ def plot_energy_error(runs, log=True, title=None):
         rel = (energies - energies[0]) / abs(energies[0])
         ax.plot(np.asarray(times) / 365.25, np.abs(rel) if log else rel,
                 label=label, lw=1)
-    ax.set_xlabel("Zeit [Jahre]")
+    ax.set_xlabel("Time [years]")
     ax.set_ylabel("|ΔE / E₀|" if log else "ΔE / E₀")
     ax.set_yscale("log") if log else ax.axhline(0, color="black", lw=0.8)
     ax.grid(alpha=0.3); ax.legend(); ax.set_title(title)
