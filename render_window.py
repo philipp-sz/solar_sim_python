@@ -1,27 +1,13 @@
-import math
 import numpy as np
 import moderngl_window as mglw
 
 
-# class SimpleWindow(mglw.WindowConfig):
-#     title = "Simple Window"
-#     window_size = (800, 600)
-#     gl_version = (3, 3)
-
-#     def __init__(self, **kwargs):
-#         super().__init__(**kwargs)
-#         self.alpha = 1.0
-
-#     def change_color_sine(self, time: float):
-#         r = 0.5 * math.sin(time) + 0.5
-#         g = 0.5 * math.sin(time + math.pi / 2) + 0.5
-#         b = 0.5 * math.sin(time + math.pi) + 0.5
-#         self.color = (r, g, b, self.alpha)
-
-#     def on_render(self, time: float, frame_time: float):
-#         self.change_color_sine(time)
-#         self.ctx.clear(*self.color)
-
+def rotation_z(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    R = np.eye(4, dtype=np.float32)
+    R[0, 0], R[0, 1] = c, -s
+    R[1, 0], R[1, 1] = s, c
+    return R
 
 class Triangle(mglw.WindowConfig):
     title = "Triangle Window"
@@ -34,11 +20,12 @@ class Triangle(mglw.WindowConfig):
         self.prog = self.ctx.program(
             vertex_shader="""
                 #version 330
+                uniform mat4 u_transform;
                 in vec2 in_pos;
                 in vec3 in_color;
                 out vec3 v_color;
                 void main() {
-                    gl_Position = vec4(in_pos, 0.0, 1.0);
+                    gl_Position = u_transform * vec4(in_pos, 0.0, 1.0);
                     v_color = in_color;
                 }
             """,
@@ -65,6 +52,8 @@ class Triangle(mglw.WindowConfig):
 
     def on_render(self, time: float, frame_time:float):
         self.ctx.clear(0.1, 0.1, 0.1, 1.0)
+        R = rotation_z(time)
+        self.prog["u_transform"].write(R.T.tobytes())
         self.vao.render()
 
 if __name__ == "__main__":

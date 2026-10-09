@@ -51,17 +51,22 @@ def calc_scaling(scalar):
     return scaling_matrix
 
 
+def rotation_z(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    R = np.eye(4, dtype=np.float32)
+    R[0, 0], R[0, 1] = c, -s
+    R[1, 0], R[1, 1] = s, c
+    return R
+
+
 def look_at(eye, target, up):
     f = target - eye # Direction of view
     f = f / np.linalg.norm(f)
-    dot = np.dot(f, up)
-    if np.abs(dot) > 1e-6:
-        up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
     r = np.cross(f, up) # Right vector, perpendicular to f and up
     r_norm = np.linalg.norm(r)
     if r_norm < 1e-3:
-        return ValueError("look_at: view direction is parallel to up (|f x up| = 3.2e-05), right vector undefined. Change eye, target or up.")
+        raise ValueError("look_at: view direction is parallel to up (|f x up| = 3.2e-05), right vector undefined. Change eye, target or up.")
     r = r / r_norm
     u = np.cross(r, f) # Recalibrated up vector, perpendicular to r and f
 
