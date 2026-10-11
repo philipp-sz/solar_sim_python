@@ -20,6 +20,8 @@ class Sphere(mglw.WindowConfig):
     def __init__(self, **kwargs: Any) -> None:
         """Create the window, the GPU objects and the camera state."""
         super().__init__(**kwargs)
+        self.number_keys: dict[int, int | None] = {self.wnd.keys.NUMBER_0: None}
+        self.number_keys.update({self.wnd.keys.NUMBER_0 + i: i - 1 for i in range(1, 10)})
 
         self._create_program() # Compile GLSL shaders
         self._create_mesh() # Create vbo, ibo, vao
@@ -75,7 +77,7 @@ class Sphere(mglw.WindowConfig):
         self.max_dist = 100. # Cap scrolling out
         self.near = 0.1
         self.far = 200.
-        self.target = np.zeros(3, dtype=np.float32)
+        self.follow: int | None = None # Index of the body the camera follows
         self.up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
     def _init_bodies(self) -> None:
@@ -98,8 +100,16 @@ class Sphere(mglw.WindowConfig):
         """Zoom: every mouse wheel notch changes the distance to the target by 10 percent."""
         self.dist *= 1.1 ** y_offset
 
-        min_dist = self.near + np.max(display_radii)
+        max_radius = np.max(display_radii) if self.follow is None else display_radii[self.follow]
+        min_dist = self.near + max_radius
         self.dist = max(min_dist, min(self.dist, self.max_dist))
+
+    def on_key_event(self, key: int, action: Any, modifiers: Any) -> None:
+        """Choose which body the camera follows: keys 1-9 select a body, key 0 goes back to the origin."""
+        if action != self.wnd.keys.ACTION_PRESS:
+            return
+        if key in self.number_keys:
+            self.follow = self.number_keys[key]
 
     def on_resize(self, width: int, height: int) -> None:
         """Recompute the projection matrix, because it depends on the aspect ratio of the window."""
@@ -118,10 +128,12 @@ class Sphere(mglw.WindowConfig):
             self.budget -= self.dt
             steps += 1
 
-        eye = self.target + self.dist * np.array((np.cos(self.el)*np.cos(self.az),
+        target = np.zeros(3) if self.follow is None else self.pos[self.follow]
+
+        eye = target + self.dist * np.array((np.cos(self.el)*np.cos(self.az),
                                             np.cos(self.el)*np.sin(self.az),
                                             np.sin(self.el)))
-        self.V = look_at(eye, self.target, self.up) # Move Camera to origin and rotate so that it looks along -z
+        self.V = look_at(eye, target, self.up) # Move Camera to origin and rotate so that it looks along -z
 
         for i in range(len(names)):
             M = calc_translation(self.pos[i]) @ calc_scaling(display_radii[i])
