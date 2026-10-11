@@ -5,7 +5,7 @@ import moderngl
 import moderngl_window as mglw
 
 from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling
-from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii
+from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii, orbital_periods
 from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
 
 
@@ -20,6 +20,8 @@ class Sphere(mglw.WindowConfig):
     def __init__(self, **kwargs: Any) -> None:
         """Create the window, the GPU objects and the camera state."""
         super().__init__(**kwargs)
+        self.num_bodies = len(names)
+        self.num_trail_points = 200
         self.number_keys: dict[int, int | None] = {self.wnd.keys.NUMBER_0: None}
         self.number_keys.update({self.wnd.keys.NUMBER_0 + i: i - 1 for i in range(1, 10)})
 
@@ -27,6 +29,7 @@ class Sphere(mglw.WindowConfig):
         self._create_mesh() # Create vbo, ibo, vao
         self._init_camera()
         self._init_bodies()
+        self._init_trail()
 
     def _create_program(self) -> None:
         """Compile the vertex and fragment shader into one GPU program."""
@@ -85,10 +88,40 @@ class Sphere(mglw.WindowConfig):
         self.acc = calc_accelerations(_differences, masses)
         self.dt = 1. # in days
         self.time_factor = 60. # days per second
-        self.budget = 0.
+        self.dt_budget = 0.
         self.max_steps = 200 # max steps per image
         self.real_radii_mode = False
         self.radii = display_radii
+
+    def _init_trail(self) -> None:
+        """Create the ring buffers, sampling timers and GPU buffers for the orbit trails of all bodies."""
+        self.trail_histories = np.zeros((self.num_bodies, self.num_trail_points, 3), dtype=np.float32)
+        self.trail_heads = np.zeros((self.num_bodies,), dtype=int)
+        self.trail_counts = np.zeros((self.num_bodies,), dtype=int)
+        self.trail_timers = np.zeros((self.num_bodies,))
+        self.trail_timers[0] = np.inf # Skip creating points for sun
+        self.trail_intervals = np.maximum(self.dt, orbital_periods / self.num_trail_points) # Interval between points of one trail
+
+        self.trail_vbos = [
+            self.ctx.buffer(reserve=self.num_trail_points * 3 * 4, dynamic=True)
+            for _ in range(self.num_bodies)
+        ]
+        self.trail_vaos = [
+            self.ctx.vertex_array(self.prog, [(vbo, "3f", "in_pos")])
+            for vbo in self.trail_vbos
+        ]
+
+    def _add_point(self, i: int, point: np.ndarray) -> None:
+        """Store a position in the ring buffer of body i, overwriting its oldest point when the buffer is full."""
+        self.trail_histories[i][self.trail_heads[i]] = point
+        self.trail_heads[i] = (self.trail_heads[i] + 1) % self.num_trail_points
+        self.trail_counts[i] = min(self.trail_counts[i] + 1, self.num_trail_points)
+
+    def _ordered_points(self, i: int) -> np.ndarray:
+        """Return the stored trail points of body i from oldest to newest."""
+        if self.trail_counts[i] < self.num_trail_points:
+            return self.trail_histories[i][:self.trail_counts[i]]
+        return np.roll(self.trail_histories[i], -self.trail_heads[i], axis=0) # Move oldest point back to the first index
 
     def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int) -> None:
         """Rotate the camera around the target while a mouse button is held."""
@@ -111,15 +144,22 @@ class Sphere(mglw.WindowConfig):
 
     def _advance_simulation(self, frame_time: float) -> None:
         """Run as many fixed-size Verlet steps as the time budget of this frame allows."""
-        self.budget += self.time_factor * frame_time
+        self.dt_budget += self.time_factor * frame_time
         steps = 0
-        while self.budget >= self.dt and steps < self.max_steps:
+        while self.dt_budget >= self.dt and steps < self.max_steps:
             self.pos, self.vel, self.acc = step_velocity_verlet(self.pos, self.vel, self.acc, masses, self.dt)
-            self.budget -= self.dt
+            self.dt_budget -= self.dt
             steps += 1
+
+            self.trail_timers -= self.dt
+            for i in range(self.num_bodies):
+                if self.trail_timers[i] <= 0:
+                    self._add_point(i, self.pos[i])
+                    self.trail_timers[i] += self.trail_intervals[i]
 
     def _update_camera(self) -> None:
         """Compute the view and projection matrices from the orbit camera state and limit the distance."""
+        self.radii = display_radii if not self.real_radii_mode else real_radii
         max_radius = np.max(self.radii) if self.follow is None else self.radii[self.follow]
         min_dist = self.near + max_radius
         self.dist = max(min_dist, min(self.dist, self.max_dist))
@@ -131,19 +171,31 @@ class Sphere(mglw.WindowConfig):
         self.V = look_at(eye, target, self.up) # Move Camera to origin and rotate so that it looks along -z
 
         aspect = self.wnd.aspect_ratio
-        self.radii = display_radii if not self.real_radii_mode else real_radii
         self.near = 0.01 * self.dist
         self.P = perspective(60, aspect, self.near, self.far) # Project Objects so that more distant ones look smaller
 
     def _draw_bodies(self) -> None:
         """Draw every body as the shared sphere mesh with its own model matrix and colour."""
-        for i in range(len(names)):
+        for i in range(self.num_bodies):
             M = calc_translation(self.pos[i]) @ calc_scaling(self.radii[i])
             mvp = self.P @ self.V @ M
             self.prog["u_mvp"].write(mvp.T.tobytes()) # type: ignore
             self.prog["u_color"].write(body_colors[i]) # type: ignore
 
             self.vao.render()
+
+    def _draw_trails(self) -> None:
+        """Draw the orbit trail of every body except the Sun as a line strip in the colour of the body."""
+        vp = self.P @ self.V
+        self.prog["u_mvp"].write(vp.T.tobytes()) # type: ignore
+        for i in range(1, self.num_bodies):
+            point = self._ordered_points(i)
+            self.trail_vbos[i].write(point)
+            self.prog["u_color"].write(body_colors[i]) # type: ignore
+
+            num_points = len(point)
+            if num_points >= 2:
+                self.trail_vaos[i].render(mode=moderngl.LINE_STRIP, vertices=num_points)
 
     def on_render(self, time: float, frame_time: float) -> None:
         """Draw one frame: advance the simulation, update the camera and draw all bodies."""
@@ -153,3 +205,4 @@ class Sphere(mglw.WindowConfig):
         self._advance_simulation(frame_time)
         self._update_camera()
         self._draw_bodies()
+        self._draw_trails()

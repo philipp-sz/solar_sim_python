@@ -91,3 +91,15 @@ real_radii: NDArray[np.float64] = np.array([
     1.6953e-04,  # Uranus
     1.6459e-04,  # Neptune
 ], dtype=np.float64)
+
+orbital_periods: NDArray[np.float64] = np.array([
+    0.0,        # Sun
+    87.97,      # Mercury
+    224.70,     # Venus
+    365.26,     # Earth+Moon
+    686.98,     # Mars
+    4332.59,    # Jupiter
+    10759.22,   # Saturn
+    30688.5,    # Uranus
+    60182.0,    # Neptune
+], dtype=np.float64)
