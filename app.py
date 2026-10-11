@@ -4,8 +4,8 @@ import numpy as np
 import moderngl
 import moderngl_window as mglw
 
-from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, RADIUS
-from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names
+from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling
+from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii
 from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
 
 
@@ -27,8 +27,6 @@ class Sphere(mglw.WindowConfig):
         self._create_mesh() # Create vbo, ibo, vao
         self._init_camera()
         self._init_bodies()
-
-        self.on_resize(self.wnd.width, self.wnd.height)
 
     def _create_program(self) -> None:
         """Compile the vertex and fragment shader into one GPU program."""
@@ -75,7 +73,7 @@ class Sphere(mglw.WindowConfig):
         self.el = np.deg2rad(47.97)
         self.dist = 10.
         self.max_dist = 100. # Cap scrolling out
-        self.near = 0.1
+        self.near = 0.01 * self.dist
         self.far = 200.
         self.follow: int | None = None # Index of the body the camera follows
         self.up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
@@ -89,6 +87,8 @@ class Sphere(mglw.WindowConfig):
         self.time_factor = 60. # days per second
         self.budget = 0.
         self.max_steps = 200 # max steps per image
+        self.real_radii_mode = False
+        self.radii = display_radii
 
     def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int) -> None:
         """Rotate the camera around the target while a mouse button is held."""
@@ -100,27 +100,17 @@ class Sphere(mglw.WindowConfig):
         """Zoom: every mouse wheel notch changes the distance to the target by 10 percent."""
         self.dist *= 1.1 ** y_offset
 
-        max_radius = np.max(display_radii) if self.follow is None else display_radii[self.follow]
-        min_dist = self.near + max_radius
-        self.dist = max(min_dist, min(self.dist, self.max_dist))
-
     def on_key_event(self, key: int, action: Any, modifiers: Any) -> None:
-        """Choose which body the camera follows: keys 1-9 select a body, key 0 goes back to the origin."""
+        """Keys 1-9 select the body the camera follows, 0 goes back to the origin, R toggles real and exaggerated radii."""
         if action != self.wnd.keys.ACTION_PRESS:
             return
         if key in self.number_keys:
             self.follow = self.number_keys[key]
+        if key == self.wnd.keys.R:
+            self.real_radii_mode = not self.real_radii_mode
 
-    def on_resize(self, width: int, height: int) -> None:
-        """Recompute the projection matrix, because it depends on the aspect ratio of the window."""
-        aspect = self.wnd.aspect_ratio
-        self.P = perspective(60, aspect, self.near, self.far) # Project Objects so that more distant ones look smaller
-
-    def on_render(self, time: float, frame_time: float) -> None:
-        """Draw one frame: advance the simulation, update the camera and draw all bodies."""
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.clear(0.1, 0.1, 0.1, 1.0)
-
+    def _advance_simulation(self, frame_time: float) -> None:
+        """Run as many fixed-size Verlet steps as the time budget of this frame allows."""
         self.budget += self.time_factor * frame_time
         steps = 0
         while self.budget >= self.dt and steps < self.max_steps:
@@ -128,17 +118,38 @@ class Sphere(mglw.WindowConfig):
             self.budget -= self.dt
             steps += 1
 
-        target = np.zeros(3) if self.follow is None else self.pos[self.follow]
+    def _update_camera(self) -> None:
+        """Compute the view and projection matrices from the orbit camera state and limit the distance."""
+        max_radius = np.max(self.radii) if self.follow is None else self.radii[self.follow]
+        min_dist = self.near + max_radius
+        self.dist = max(min_dist, min(self.dist, self.max_dist))
 
+        target = np.zeros(3) if self.follow is None else self.pos[self.follow]
         eye = target + self.dist * np.array((np.cos(self.el)*np.cos(self.az),
                                             np.cos(self.el)*np.sin(self.az),
                                             np.sin(self.el)))
         self.V = look_at(eye, target, self.up) # Move Camera to origin and rotate so that it looks along -z
 
+        aspect = self.wnd.aspect_ratio
+        self.radii = display_radii if not self.real_radii_mode else real_radii
+        self.near = 0.01 * self.dist
+        self.P = perspective(60, aspect, self.near, self.far) # Project Objects so that more distant ones look smaller
+
+    def _draw_bodies(self) -> None:
+        """Draw every body as the shared sphere mesh with its own model matrix and colour."""
         for i in range(len(names)):
-            M = calc_translation(self.pos[i]) @ calc_scaling(display_radii[i])
+            M = calc_translation(self.pos[i]) @ calc_scaling(self.radii[i])
             mvp = self.P @ self.V @ M
             self.prog["u_mvp"].write(mvp.T.tobytes()) # type: ignore
             self.prog["u_color"].write(body_colors[i]) # type: ignore
 
             self.vao.render()
+
+    def on_render(self, time: float, frame_time: float) -> None:
+        """Draw one frame: advance the simulation, update the camera and draw all bodies."""
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.clear(0.1, 0.1, 0.1, 1.0)
+
+        self._advance_simulation(frame_time)
+        self._update_camera()
+        self._draw_bodies()
