@@ -4,13 +4,15 @@ import numpy as np
 import moderngl
 import moderngl_window as mglw
 
-from calculations.calc_graphics import look_at, perspective, calc_points, RADIUS
+from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, RADIUS
+from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names
+from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
 
 
 class Sphere(mglw.WindowConfig):
-    """Window that shows a sphere seen by an orbit camera controlled with the mouse."""
+    """Window that shows the simulated solar system seen by an orbit camera controlled with the mouse."""
 
-    title = "Index Buffer + Depth Test"
+    title = "Solar System Simulation"
     window_size = (800, 600)
     gl_version = (3, 3)
     aspect_ratio = None # type: ignore
@@ -22,6 +24,7 @@ class Sphere(mglw.WindowConfig):
         self._create_program() # Compile GLSL shaders
         self._create_mesh() # Create vbo, ibo, vao
         self._init_camera()
+        self._init_bodies()
 
         self.on_resize(self.wnd.width, self.wnd.height)
 
@@ -32,36 +35,34 @@ class Sphere(mglw.WindowConfig):
             vertex_shader="""
                 #version 330
                 in vec3 in_pos;
+                uniform vec3 u_color;
                 uniform mat4 u_mvp;
-                in vec3 in_color;
-                out vec3 v_color;
+                out vec3 frag_color;
                 void main() {
                     gl_Position = u_mvp * vec4(in_pos, 1.0);
-                    v_color = in_color;
+                    frag_color = u_color;
                 }
             """,
             # Decide color and depth of the rasterized pixels in each shape
             fragment_shader="""
                 #version 330
-                in vec3 v_color;
-                out vec4 f_color;
+                in vec3 frag_color;
+                out vec4 out_color;
                 void main() {
-                    f_color = vec4(v_color, 1.0);
+                    out_color = vec4(frag_color, 1.0);
                 }
             """
         )
 
     def _create_mesh(self) -> None:
         """Upload the sphere mesh to the GPU and describe its layout in a vertex array."""
-        positions, indices = calc_points(32, 64)
-        colors = positions * 0.5 + 0.5
-        vertices = np.hstack([positions, colors]).astype(np.float32)
+        vertices, indices = calc_points(32, 64)
 
         self.vbo = self.ctx.buffer(vertices.tobytes()) # Vertex Buffer Object: Reserve storage in VRAM
         self.ibo = self.ctx.buffer(indices.tobytes()) # Index Buffer Object: Indices that reference vertices
         self.vao = self.ctx.vertex_array( # Vertex Array Object: Stores information about how an object is built
             self.prog,
-            [(self.vbo, "3f 3f", "in_pos", "in_color")],
+            [(self.vbo, "3f", "in_pos")],
             index_buffer=self.ibo,
             index_element_size=4
         )
@@ -70,12 +71,22 @@ class Sphere(mglw.WindowConfig):
         """Set the start state of the orbit camera (angles in radians, distance in AU)."""
         self.az = np.deg2rad(33.69)
         self.el = np.deg2rad(47.97)
-        self.dist = 5.385
-        self.max_dist = 50 # Cap scrolling out
+        self.dist = 10.
+        self.max_dist = 100. # Cap scrolling out
         self.near = 0.1
-        self.far = 100
+        self.far = 200.
         self.target = np.zeros(3, dtype=np.float32)
         self.up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+    def _init_bodies(self) -> None:
+        """Set the start state of the simulation: positions, velocities, accelerations and time stepping."""
+        self.pos, self.vel = correct_center_of_mass(positions, velocities, masses)
+        _differences = calc_differences(self.pos)
+        self.acc = calc_accelerations(_differences, masses)
+        self.dt = 1. # in days
+        self.time_factor = 60. # days per second
+        self.budget = 0.
+        self.max_steps = 200 # max steps per image
 
     def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int) -> None:
         """Rotate the camera around the target while a mouse button is held."""
@@ -87,7 +98,7 @@ class Sphere(mglw.WindowConfig):
         """Zoom: every mouse wheel notch changes the distance to the target by 10 percent."""
         self.dist *= 1.1 ** y_offset
 
-        min_dist = self.near + np.max(RADIUS)
+        min_dist = self.near + np.max(display_radii)
         self.dist = max(min_dist, min(self.dist, self.max_dist))
 
     def on_resize(self, width: int, height: int) -> None:
@@ -96,15 +107,26 @@ class Sphere(mglw.WindowConfig):
         self.P = perspective(60, aspect, self.near, self.far) # Project Objects so that more distant ones look smaller
 
     def on_render(self, time: float, frame_time: float) -> None:
-        """Draw one frame: update the camera and draw the sphere."""
+        """Draw one frame: advance the simulation, update the camera and draw all bodies."""
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.clear(0.1, 0.1, 0.1, 1.0)
+
+        self.budget += self.time_factor * frame_time
+        steps = 0
+        while self.budget >= self.dt and steps < self.max_steps:
+            self.pos, self.vel, self.acc = step_velocity_verlet(self.pos, self.vel, self.acc, masses, self.dt)
+            self.budget -= self.dt
+            steps += 1
 
         eye = self.target + self.dist * np.array((np.cos(self.el)*np.cos(self.az),
                                             np.cos(self.el)*np.sin(self.az),
                                             np.sin(self.el)))
         self.V = look_at(eye, self.target, self.up) # Move Camera to origin and rotate so that it looks along -z
 
-        mvp = self.P @ self.V
-        self.prog["u_mvp"].write(mvp.T.tobytes())
-        self.vao.render()
+        for i in range(len(names)):
+            M = calc_translation(self.pos[i]) @ calc_scaling(display_radii[i])
+            mvp = self.P @ self.V @ M
+            self.prog["u_mvp"].write(mvp.T.tobytes()) # type: ignore
+            self.prog["u_color"].write(body_colors[i]) # type: ignore
+
+            self.vao.render()

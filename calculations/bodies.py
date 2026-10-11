@@ -65,3 +65,17 @@ body_colors: NDArray[np.float32] = np.array([
     [0.20, 0.30, 0.80],  # Neptune
     [0.20, 0.50, 0.80],  # Earth+Moon
 ], dtype=np.float32)
+
+# Display radii in AU. Exaggerated: the real radii are far below one pixel.
+display_radii: NDArray[np.float64] = np.array([
+    0.15,  # Sun
+    0.04,  # Mercury
+    0.05,  # Venus
+    0.05,  # Mars
+    0.12,  # Jupiter
+    0.10,  # Saturn
+    0.08,  # Uranus
+    0.08,  # Neptune
+    0.05,  # Earth+Moon
+], dtype=np.float64)
+
