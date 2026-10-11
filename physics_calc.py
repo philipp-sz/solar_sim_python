@@ -102,17 +102,19 @@ def simulate(step, pos, vel, masses, dt, n_steps):
         energies[k + 1] = get_energy(pos, vel, masses)[-1]
     return times, energies
 
-differences = calc_differences(positions)
-accelerations = calc_accelerations(differences, masses)
-R = sum(positions * masses[:, None]) / masses.sum()
-V = sum(velocities * masses[:, None]) / sum(masses[:, None])
-positions = positions - R[None, :]
-velocities = velocities - V
+def correct_center_of_mass(positions, velocities, masses):
+    R = sum(positions * masses[:, None]) / masses.sum()
+    V = sum(velocities * masses[:, None]) / sum(masses[:, None])
+    positions = positions - R[None, :]
+    velocities = velocities - V
+    return positions, velocities
 
-T = 365.25
-n = 365
-dt = T / n
-integrators = {"Euler": step_euler, "Velocity Verlet": step_velocity_verlet}
-runs = {name: simulate(f, positions, velocities, masses, dt, n)
-        for name, f in integrators.items()}
-plot_energy_error(runs)
+if __name__ == "__main__":
+    positions, velocities = correct_center_of_mass(positions, velocities, masses)
+    T = 365.25
+    n = 365
+    dt = T / n
+    integrators = {"Euler": step_euler, "Velocity Verlet": step_velocity_verlet}
+    runs = {name: simulate(f, positions, velocities, masses, dt, n)
+            for name, f in integrators.items()}
+    plot_energy_error(runs)
