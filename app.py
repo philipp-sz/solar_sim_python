@@ -66,19 +66,28 @@ class Sphere(mglw.WindowConfig):
                 in vec3 in_pos;
                 in vec2 in_uv;
                 uniform mat4 u_mvp;
+                uniform mat4 u_model;
                 out vec2 i_uv;
+                out vec3 v_normal;
                 void main() {
                     gl_Position = u_mvp * vec4(in_pos, 1.0);
+                    v_normal = normalize(mat3(u_model) * in_pos); // cut out translation before transformation
                     i_uv = in_uv;
                 }
             """,
             fragment_shader="""
                 #version 330
-                uniform sampler2D u_texture;
                 in vec2 i_uv;
+                uniform sampler2D u_texture;
+                in vec3 v_normal;
+                uniform vec3 u_light_dir;
+                uniform float u_lit; // is illuminated (1) or glows on its own (0)
                 out vec4 out_color;
                 void main() {
-                    out_color = texture(u_texture, i_uv);
+                    vec3 n = normalize(v_normal);
+                    float diffuse = max(dot(n, u_light_dir), 0.0);
+                    float light = mix(1.0, 0.1 + 0.9 * diffuse, u_lit);
+                    out_color = texture(u_texture, i_uv) * light;
                 }
             """
         )
@@ -90,6 +99,9 @@ class Sphere(mglw.WindowConfig):
         self.u_tex_mvp = cast(moderngl.Uniform, self.texture_prog["u_mvp"])
         self.u_texture = cast(moderngl.Uniform, self.texture_prog["u_texture"])
         self.u_texture.value = 0 # read texture from position 0
+        self.u_model = cast(moderngl.Uniform, self.texture_prog["u_model"])
+        self.u_light_dir = cast(moderngl.Uniform, self.texture_prog["u_light_dir"])
+        self.u_lit = cast(moderngl.Uniform, self.texture_prog["u_lit"])
 
     def _init_textures(self, vertices, textures) -> None:
         texture_input = np.hstack((vertices, textures))
@@ -242,6 +254,15 @@ class Sphere(mglw.WindowConfig):
             mvp = self.P @ self.V @ M
             self.u_tex_mvp.write(mvp.T.tobytes())
             self.textures[i].use(location=0) # write texture to position 0 on GPU
+            self.u_model.write(M.T.tobytes())
+
+            d = self.pos[0] - self.pos[i] 
+            if i != 0:
+                self.u_lit.value = 1.0
+                light_dir = d / np.linalg.norm(d)
+                self.u_light_dir.write(np.array(light_dir, dtype=np.float32).tobytes())
+            else:
+                self.u_lit.value = 0.0
 
             self.texture_vao.render()
 
