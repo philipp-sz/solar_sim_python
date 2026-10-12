@@ -103,3 +103,27 @@ orbital_periods: NDArray[np.float64] = np.array([
     30688.5,    # Uranus
     60182.0,    # Neptune
 ], dtype=np.float64)
+
+rotation_periods: NDArray[np.float64] = np.array([
+    25.38,      # Sun
+    58.65,      # Mercury
+    243.021,    # Venus
+    0.99727,    # Earth+Moon
+    1.02596,    # Mars
+    0.41354,    # Jupiter
+    0.44401,    # Saturn
+    0.71833,    # Uranus
+    0.67125,    # Neptune
+], dtype=np.float64)
+
+axial_tilts: NDArray[np.float64] = np.array([
+    7.25,       # Sun
+    0.034,      # Mercury
+    177.4,      # Venus
+    23.4,       # Earth+Moon
+    25.2,       # Mars
+    3.1,        # Jupiter
+    26.7,       # Saturn
+    97.8,       # Uranus
+    28.3,       # Neptune
+], dtype=np.float64)

@@ -79,6 +79,15 @@ def rotation_z(angle: float) -> Matrix:
     return R
 
 
+def rotation_x(angle: float) -> Matrix:
+    """Return the 4x4 matrix that rotates points counter-clockwise around the x axis (angle in radians)."""
+    c, s = np.cos(angle), np.sin(angle)
+    R = np.eye(4, dtype=np.float32)
+    R[1, 1], R[1, 2] = c, -s
+    R[2, 1], R[2, 2] = s, c
+    return R
+
+
 def look_at(eye: Vector, target: Vector, up: Vector) -> Matrix:
     """Return the view matrix that puts the camera at `eye` looking at `target`, with `up` as the upward direction."""
     f = target - eye # Direction of view

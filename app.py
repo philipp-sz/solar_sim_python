@@ -6,8 +6,8 @@ import numpy as np
 import moderngl
 import moderngl_window as mglw
 
-from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling
-from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii, orbital_periods
+from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, rotation_x, rotation_z
+from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii, orbital_periods, rotation_periods, axial_tilts
 from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
 
 
@@ -165,6 +165,12 @@ class Sphere(mglw.WindowConfig):
         self.max_steps = 200 # max steps per image
         self.real_radii_mode = False
         self.radii = display_radii
+        self.spin_angles = np.zeros((9,))
+        self.max_spin_rate = 360.0 # degrees per second
+        self.cap_spin = True
+        self.inspect_spin_rate = 20.0  # degrees per second, same for every body
+        self.inspect_mode = False
+        self.speed = self.time_factor
 
     def _init_trail(self) -> None:
         """Create the ring buffers, sampling timers and GPU buffers for the orbit trails of all bodies."""
@@ -214,10 +220,12 @@ class Sphere(mglw.WindowConfig):
             self.follow = self.number_keys[key]
         if key == self.wnd.keys.R:
             self.real_radii_mode = not self.real_radii_mode
+        if key == self.wnd.keys.C:
+            self.cap_spin = not self.cap_spin
 
     def _advance_simulation(self, frame_time: float) -> None:
         """Run as many fixed-size Verlet steps as the time budget of this frame allows."""
-        self.dt_budget += self.time_factor * frame_time
+        self.dt_budget += self.speed * frame_time
         steps = 0
         while self.dt_budget >= self.dt and steps < self.max_steps:
             self.pos, self.vel, self.acc = step_velocity_verlet(self.pos, self.vel, self.acc, masses, self.dt)
@@ -229,6 +237,17 @@ class Sphere(mglw.WindowConfig):
                 if self.trail_timers[i] <= 0:
                     self._add_point(i, self.pos[i])
                     self.trail_timers[i] += self.trail_intervals[i]
+
+    def _update_spins(self, frame_time: float) -> None:
+        """Advance the spin angle of every body, optionally limited to a maximum rotation speed."""
+        if self.inspect_mode:
+            delta = np.full(self.num_bodies, np.deg2rad(self.inspect_spin_rate) * frame_time)
+        else:
+            days = self.speed * frame_time
+            delta = 2 * np.pi * days / rotation_periods # type: ignore
+            if self.cap_spin:
+                delta = np.minimum(delta, np.deg2rad(self.max_spin_rate) * frame_time)
+        self.spin_angles = (self.spin_angles + delta) % (2 * np.pi)
 
     def _update_camera(self) -> None:
         """Compute the view and projection matrices from the orbit camera state and limit the distance."""
@@ -250,17 +269,21 @@ class Sphere(mglw.WindowConfig):
     def _draw_bodies(self) -> None:
         """Draw every body as the shared sphere mesh with its own model matrix and colour."""
         for i in range(self.num_bodies):
-            M = calc_translation(self.pos[i]) @ calc_scaling(self.radii[i])
+            Rx = rotation_x(np.deg2rad(axial_tilts[i]))
+            Rz = rotation_z(self.spin_angles[i])
+            M = calc_translation(self.pos[i]) @ Rx @ Rz @ calc_scaling(self.radii[i])
+
             mvp = self.P @ self.V @ M
             self.u_tex_mvp.write(mvp.T.tobytes())
             self.textures[i].use(location=0) # write texture to position 0 on GPU
             self.u_model.write(M.T.tobytes())
 
-            d = self.pos[0] - self.pos[i] 
+            d = self.pos[0] - self.pos[i]
             if i != 0:
                 self.u_lit.value = 1.0
                 light_dir = d / np.linalg.norm(d)
                 self.u_light_dir.write(np.array(light_dir, dtype=np.float32).tobytes())
+
             else:
                 self.u_lit.value = 0.0
 
@@ -284,7 +307,11 @@ class Sphere(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.clear(0.1, 0.1, 0.1, 1.0)
 
+        self.inspect_mode = self.wnd.is_key_pressed(self.wnd.keys.SPACE)
+        self.speed = 0.0 if self.inspect_mode else self.time_factor
+
         self._advance_simulation(frame_time)
+        self._update_spins(frame_time)
         self._update_camera()
         self._draw_bodies()
         self._draw_trails()
