@@ -9,18 +9,23 @@ CENTER = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 RADIUS = np.array([1.0, 1.0, 1.0], dtype=np.float64)
 
 
-def calc_vertices(num_stacks: int, num_slices: int) -> list[tuple[float, float, float]]:
-    """Return the vertex positions of a UV sphere as a (num_stacks+1) x (num_slices+1) grid, row by row."""
+def calc_vertices(num_stacks: int, num_slices: int) -> tuple[list[tuple[float, float, float]], list[tuple[float, float]]]:
+    """Return positions (x, y, z) and texture coordinates (u, v) of a UV sphere as a (num_stacks+1) x (num_slices+1) grid, row by row."""
     vertices = []
+    textures = []
     for i in range(num_stacks + 1):
+        v = 1 - i / num_stacks
         theta = np.pi * i / num_stacks # Angle from positive z downwards for each horizontal stack
         for j in range(num_slices + 1):
+            u = j / num_slices
+            textures.append((u, v))
+
             phi = 2 * np.pi * j / num_slices # Angle in XY plane around z axis for each vertical slice
             x = RADIUS[0] * np.sin(theta) * np.cos(phi) + CENTER[0]
             y = RADIUS[1] * np.sin(theta) * np.sin(phi) + CENTER[1]
             z = RADIUS[2] * np.cos(theta) + CENTER[2]
             vertices.append((x, y, z))
-    return vertices
+    return vertices, textures
 
 
 def calc_indices(num_stacks: int, num_slices: int) -> list[tuple[int, int, int]]:
@@ -39,11 +44,15 @@ def calc_indices(num_stacks: int, num_slices: int) -> list[tuple[int, int, int]]
     return indices
 
 
-def calc_points(num_stacks: int, num_slices: int) -> tuple[NDArray[np.float32], NDArray[np.uint32]]:
-    """Return the sphere mesh as GPU-ready arrays: float32 vertices (N, 3) and uint32 indices (T, 3)."""
-    vertices = calc_vertices(num_stacks, num_slices)
+def calc_points(num_stacks: int, num_slices: int) -> tuple[NDArray[np.float32], NDArray[np.uint32], NDArray[np.float32]]:
+    """Return the sphere mesh as GPU-ready arrays: float32 vertices (N, 3), uint32 indices (T, 3) and float32 texture coordinates (N, 2)."""
+    vertices, textures = calc_vertices(num_stacks, num_slices)
     indices = calc_indices(num_stacks, num_slices)
-    return np.array(vertices, dtype=np.float32), np.array(indices, dtype=np.uint32)
+
+    vertices_array = np.array(vertices, dtype=np.float32)
+    textures_array = np.array(textures, dtype=np.float32)
+    indices_array = np.array(indices, dtype=np.uint32)
+    return vertices_array, indices_array, textures_array
 
 
 def calc_translation(translation_vector: Vector) -> Matrix:

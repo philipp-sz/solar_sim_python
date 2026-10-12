@@ -1,4 +1,6 @@
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
+from PIL import Image
 
 import numpy as np
 import moderngl
@@ -26,6 +28,7 @@ class Sphere(mglw.WindowConfig):
         self.number_keys.update({self.wnd.keys.NUMBER_0 + i: i - 1 for i in range(1, 10)})
 
         self._create_program() # Compile GLSL shaders
+        self._init_uniforms()
         self._create_mesh() # Create vbo, ibo, vao
         self._init_camera()
         self._init_bodies()
@@ -57,9 +60,65 @@ class Sphere(mglw.WindowConfig):
             """
         )
 
+        self.texture_prog = self.ctx.program(
+            vertex_shader="""
+                #version 330
+                in vec3 in_pos;
+                in vec2 in_uv;
+                uniform mat4 u_mvp;
+                out vec2 i_uv;
+                void main() {
+                    gl_Position = u_mvp * vec4(in_pos, 1.0);
+                    i_uv = in_uv;
+                }
+            """,
+            fragment_shader="""
+                #version 330
+                uniform sampler2D u_texture;
+                in vec2 i_uv;
+                out vec4 out_color;
+                void main() {
+                    out_color = texture(u_texture, i_uv);
+                }
+            """
+        )
+
+    def _init_uniforms(self) -> None:
+        """Look up the shader uniforms once and keep typed references to them."""
+        self.u_mvp = cast(moderngl.Uniform, self.prog["u_mvp"])
+        self.u_color = cast(moderngl.Uniform, self.prog["u_color"])
+        self.u_tex_mvp = cast(moderngl.Uniform, self.texture_prog["u_mvp"])
+        self.u_texture = cast(moderngl.Uniform, self.texture_prog["u_texture"])
+        self.u_texture.value = 0 # read texture from position 0
+
+    def _init_textures(self, vertices, textures) -> None:
+        texture_input = np.hstack((vertices, textures))
+        self.texture_vbo = self.ctx.buffer(texture_input.tobytes())
+        self.texture_vao = self.ctx.vertex_array(
+            self.texture_prog,
+            [(self.texture_vbo, "3f 2f", "in_pos", "in_uv")],
+            index_buffer=self.ibo,
+            index_element_size=4 # Bytes per entry in index buffer
+        )
+
+        path = Path(__file__).parent / "assets" / "textures" / "bodies"
+        self.textures: list[moderngl.Texture] = []
+        for i, name in enumerate(names):
+            name = name.lower().replace("+", "_")
+
+            dir_name = path / name
+            variant = sorted(dir_name.glob("*.jpg"))[0]
+            file_name = dir_name / variant
+            img = Image.open(file_name).convert("RGB")
+            img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM) # OpenGL expects Bottom img row first
+
+            self.textures.append(self.ctx.texture(img.size, 3, img.tobytes()))
+            self.textures[i].filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            self.textures[i].build_mipmaps()
+
     def _create_mesh(self) -> None:
         """Upload the sphere mesh to the GPU and describe its layout in a vertex array."""
-        vertices, indices = calc_points(32, 64)
+        vertices, indices, textures = calc_points(32, 64)
 
         self.vbo = self.ctx.buffer(vertices.tobytes()) # Vertex Buffer Object: Reserve storage in VRAM
         self.ibo = self.ctx.buffer(indices.tobytes()) # Index Buffer Object: Indices that reference vertices
@@ -69,6 +128,8 @@ class Sphere(mglw.WindowConfig):
             index_buffer=self.ibo,
             index_element_size=4
         )
+
+        self._init_textures(vertices, textures)
 
     def _init_camera(self) -> None:
         """Set the start state of the orbit camera (angles in radians, distance in AU)."""
@@ -179,19 +240,19 @@ class Sphere(mglw.WindowConfig):
         for i in range(self.num_bodies):
             M = calc_translation(self.pos[i]) @ calc_scaling(self.radii[i])
             mvp = self.P @ self.V @ M
-            self.prog["u_mvp"].write(mvp.T.tobytes()) # type: ignore
-            self.prog["u_color"].write(body_colors[i]) # type: ignore
+            self.u_tex_mvp.write(mvp.T.tobytes())
+            self.textures[i].use(location=0) # write texture to position 0 on GPU
 
-            self.vao.render()
+            self.texture_vao.render()
 
     def _draw_trails(self) -> None:
         """Draw the orbit trail of every body except the Sun as a line strip in the colour of the body."""
         vp = self.P @ self.V
-        self.prog["u_mvp"].write(vp.T.tobytes()) # type: ignore
+        self.u_mvp.write(vp.T.tobytes())
         for i in range(1, self.num_bodies):
             point = self._ordered_points(i)
             self.trail_vbos[i].write(point)
-            self.prog["u_color"].write(body_colors[i]) # type: ignore
+            self.u_color.write(body_colors[i])
 
             num_points = len(point)
             if num_points >= 2:

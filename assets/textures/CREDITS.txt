@@ -1,0 +1,3 @@
+Textures: Solar System Scope (https://www.solarsystemscope.com/textures),
+licensed under Creative Commons Attribution 4.0 (CC BY 4.0), based on NASA imagery.
+Check the license terms and the required attribution wording on the source page.
