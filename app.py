@@ -104,6 +104,7 @@ class Sphere(mglw.WindowConfig):
         self.u_lit = cast(moderngl.Uniform, self.texture_prog["u_lit"])
 
     def _init_textures(self, vertices, textures) -> None:
+        self.texture_idx = np.zeros(self.num_bodies, dtype=int)
         texture_input = np.hstack((vertices, textures))
         self.texture_vbo = self.ctx.buffer(texture_input.tobytes())
         self.texture_vao = self.ctx.vertex_array(
@@ -114,19 +115,21 @@ class Sphere(mglw.WindowConfig):
         )
 
         path = Path(__file__).parent / "assets" / "textures" / "bodies"
-        self.textures: list[moderngl.Texture] = []
-        for i, name in enumerate(names):
+        self.textures: list[list[moderngl.Texture]] = []
+        for name in names:
             name = name.lower().replace("+", "_")
-
             dir_name = path / name
-            variant = sorted(dir_name.glob("*.jpg"))[0]
-            file_name = dir_name / variant
-            img = Image.open(file_name).convert("RGB")
-            img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM) # OpenGL expects Bottom img row first
+            body_textures = []
+            for variant in sorted(dir_name.glob("*.jpg")):
+                file_name = dir_name / variant
+                img = Image.open(file_name).convert("RGB")
+                img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM) # OpenGL expects Bottom img row first
 
-            self.textures.append(self.ctx.texture(img.size, 3, img.tobytes()))
-            self.textures[i].filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-            self.textures[i].build_mipmaps()
+                texture = self.ctx.texture(img.size, 3, img.tobytes())
+                texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+                texture.build_mipmaps()
+                body_textures.append(texture)
+            self.textures.append(body_textures)
 
     def _create_mesh(self) -> None:
         """Upload the sphere mesh to the GPU and describe its layout in a vertex array."""
@@ -222,6 +225,8 @@ class Sphere(mglw.WindowConfig):
             self.real_radii_mode = not self.real_radii_mode
         if key == self.wnd.keys.C:
             self.cap_spin = not self.cap_spin
+        if key == self.wnd.keys.T and self.follow is not None:
+            self.texture_idx[self.follow] = (self.texture_idx[self.follow]+1) % len(self.textures[self.follow])
 
     def _advance_simulation(self, frame_time: float) -> None:
         """Run as many fixed-size Verlet steps as the time budget of this frame allows."""
@@ -275,7 +280,7 @@ class Sphere(mglw.WindowConfig):
 
             mvp = self.P @ self.V @ M
             self.u_tex_mvp.write(mvp.T.tobytes())
-            self.textures[i].use(location=0) # write texture to position 0 on GPU
+            self.textures[i][self.texture_idx[i]].use(location=0) # write texture to position 0 on GPU
             self.u_model.write(M.T.tobytes())
 
             d = self.pos[0] - self.pos[i]
