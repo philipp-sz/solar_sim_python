@@ -5,12 +5,9 @@ from numpy.typing import NDArray
 Matrix = NDArray[np.float32]
 Vector = NDArray[np.floating]
 
-CENTER = np.array([0.0, 0.0, 0.0], dtype=np.float64)
-RADIUS = np.array([1.0, 1.0, 1.0], dtype=np.float64)
-
 
 def calc_vertices(num_stacks: int, num_slices: int) -> tuple[list[tuple[float, float, float]], list[tuple[float, float]]]:
-    """Return positions (x, y, z) and texture coordinates (u, v) of a UV sphere as a (num_stacks+1) x (num_slices+1) grid, row by row."""
+    """Return positions (x, y, z) and texture coordinates (u, v) of a unit UV sphere (radius 1, centred at the origin) as a (num_stacks+1) x (num_slices+1) grid, row by row."""
     vertices = []
     textures = []
     for i in range(num_stacks + 1):
@@ -21,9 +18,9 @@ def calc_vertices(num_stacks: int, num_slices: int) -> tuple[list[tuple[float, f
             textures.append((u, v))
 
             phi = 2 * np.pi * j / num_slices # Angle in XY plane around z axis for each vertical slice
-            x = RADIUS[0] * np.sin(theta) * np.cos(phi) + CENTER[0]
-            y = RADIUS[1] * np.sin(theta) * np.sin(phi) + CENTER[1]
-            z = RADIUS[2] * np.cos(theta) + CENTER[2]
+            x = np.sin(theta) * np.cos(phi)
+            y = np.sin(theta) * np.sin(phi)
+            z = np.cos(theta)
             vertices.append((x, y, z))
     return vertices, textures
 
@@ -53,6 +50,27 @@ def calc_points(num_stacks: int, num_slices: int) -> tuple[NDArray[np.float32], 
     textures_array = np.array(textures, dtype=np.float32)
     indices_array = np.array(indices, dtype=np.uint32)
     return vertices_array, indices_array, textures_array
+
+
+def calc_ring(inner: float, segments: int) -> tuple[NDArray[np.float32], NDArray[np.uint32]]:
+    """Return a flat ring (outer radius 1, inner radius `inner`) in the xy plane as float32 vertices (2N, 3), uint32 indices (2N, 3) and float32 texture coordinates (2N, 2)."""
+    angles = 2 * np.pi * np.arange(segments) / segments
+    c, s = np.cos(angles), np.sin(angles)
+
+    vertices = np.zeros((2 * segments, 5), dtype=np.float32)
+    vertices[0::2, 0], vertices[0::2, 1] = inner * c, inner * s # inner radius scaled down
+    vertices[1::2, 0], vertices[1::2, 1] = c, s
+    vertices[1::2, 3], vertices[:, 4] = 1.0, 0.5
+
+    k = np.arange(segments)
+    k_next = (k + 1) % segments
+    inner_k, outer_k = 2 * k, 2 * k + 1
+    inner_n, outer_n = 2 * k_next, 2 * k_next + 1
+
+    tri_a = np.stack([inner_k, outer_k, inner_n], axis=1)
+    tri_b = np.stack([outer_k, outer_n, inner_n], axis=1)
+    indices = np.concatenate([tri_a, tri_b]).astype(np.uint32)
+    return vertices, indices
 
 
 def calc_translation(translation_vector: Vector) -> Matrix:

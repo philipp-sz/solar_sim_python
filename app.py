@@ -1,29 +1,34 @@
-from pathlib import Path
 from typing import Any, cast
-from PIL import Image
 
 import numpy as np
 import moderngl
 import moderngl_window as mglw
 
-from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, rotation_x, rotation_z
-from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii, orbital_periods, rotation_periods, axial_tilts, texture_switchable, day_night_textures
+import config as cfg
+from utils import load_texture, load_program
+from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, rotation_x, rotation_z, calc_ring
 from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
+from calculations.bodies import (masses, positions, velocities, body_colors,
+                                display_radii, names, real_radii, orbital_periods,
+                                rotation_periods, axial_tilts, texture_switchable,
+                                day_night_textures)
 
 
-class Sphere(mglw.WindowConfig):
+class SolarSystemApp(mglw.WindowConfig):
     """Window that shows the simulated solar system seen by an orbit camera controlled with the mouse."""
 
-    title = "Solar System Simulation"
-    window_size = (800, 600)
-    gl_version = (3, 3)
+    title = cfg.WINDOW_TITLE
+    window_size = cfg.WINDOW_SIZE
+    gl_version = cfg.GL_VERSION
     aspect_ratio = None # type: ignore
 
     def __init__(self, **kwargs: Any) -> None:
         """Create the window, the GPU objects and the camera state."""
         super().__init__(**kwargs)
+        self.ctx.enable(moderngl.DEPTH_TEST) # Discard fragments that lie behind an already drawn surface
         self.num_bodies = len(names)
-        self.num_trail_points = 200
+        self.num_trail_points = cfg.TRAIL_POINTS
+        self.ring_body = names.index(cfg.RING_BODY_NAME)
         self.number_keys: dict[int, int | None] = {self.wnd.keys.NUMBER_0: None}
         self.number_keys.update({self.wnd.keys.NUMBER_0 + i: i - 1 for i in range(1, 10)})
 
@@ -35,76 +40,10 @@ class Sphere(mglw.WindowConfig):
         self._init_trail()
 
     def _create_program(self) -> None:
-        """Compile the vertex and fragment shader into one GPU program."""
-        self.prog = self.ctx.program(
-            # Applied on every vertex, transform vertices to final Screenspace
-            vertex_shader="""
-                #version 330
-                in vec3 in_pos;
-                uniform vec3 u_color;
-                uniform mat4 u_mvp;
-                out vec3 frag_color;
-                void main() {
-                    gl_Position = u_mvp * vec4(in_pos, 1.0);
-                    frag_color = u_color;
-                }
-            """,
-            # Decide color and depth of the rasterized pixels in each shape
-            fragment_shader="""
-                #version 330
-                in vec3 frag_color;
-                out vec4 out_color;
-                void main() {
-                    out_color = vec4(frag_color, 1.0);
-                }
-            """
-        )
-
-        self.texture_prog = self.ctx.program(
-            vertex_shader="""
-                #version 330
-                in vec3 in_pos;
-                in vec2 in_uv;
-                uniform mat4 u_mvp;
-                uniform mat4 u_model;
-                out vec2 i_uv;
-                out vec3 v_normal;
-                void main() {
-                    gl_Position = u_mvp * vec4(in_pos, 1.0);
-                    v_normal = normalize(mat3(u_model) * in_pos); // cut out translation before transformation
-                    i_uv = in_uv;
-                }
-            """,
-            fragment_shader="""
-                #version 330
-                in vec2 i_uv;
-                in vec3 v_normal;
-                uniform sampler2D u_texture;
-                uniform sampler2D u_night_texture;
-                uniform sampler2D u_clouds_texture;
-                uniform vec3 u_light_dir;
-                uniform float u_lit; // is illuminated (1) or glows on its own (0)
-                uniform float u_has_night; // earth night side (1) or day side (0)
-                uniform float u_clouds_on;
-                out vec4 out_color;
-                void main() {
-                    vec3 n = normalize(v_normal);
-                    float diffuse = max(dot(n, u_light_dir), 0.0);
-
-                    vec3 day = texture(u_texture, i_uv).rgb;
-                    vec3 night = texture(u_night_texture, i_uv).rgb;
-                    float cloud = texture(u_clouds_texture, i_uv).r * u_clouds_on;
-                    day = mix(day, vec3(1.0), cloud);
-                    night = night * (1.0 - cloud);
-
-                    vec3 lit = day * (0.1 + 0.9 * diffuse);
-                    float day_amount = smoothstep(0.0, 0.25, diffuse);
-                    vec3 earth = mix(night, lit, day_amount);
-                    vec3 surface = mix(lit, earth, u_has_night);
-                    out_color = vec4(mix(day, surface, u_lit), 1.0);
-                }
-            """
-        )
+        """Compile the colour program (trails) and the texture program (bodies and ring) from the shaders folder."""
+        self.prog = load_program(self.ctx, "color")
+        self.texture_prog = load_program(self.ctx, "texture")
+        self.ring_prog = load_program(self.ctx, "ring")
 
     def _init_uniforms(self) -> None:
         """Look up the shader uniforms once and keep typed references to them."""
@@ -112,18 +51,31 @@ class Sphere(mglw.WindowConfig):
         self.u_color = cast(moderngl.Uniform, self.prog["u_color"])
         self.u_tex_mvp = cast(moderngl.Uniform, self.texture_prog["u_mvp"])
         self.u_texture = cast(moderngl.Uniform, self.texture_prog["u_texture"])
-        self.u_texture.value = 0 # read texture from position 0
+        self.u_texture.value = cfg.TEXTURE_UNIT_MAIN
         self.u_model = cast(moderngl.Uniform, self.texture_prog["u_model"])
         self.u_light_dir = cast(moderngl.Uniform, self.texture_prog["u_light_dir"])
         self.u_lit = cast(moderngl.Uniform, self.texture_prog["u_lit"])
         self.u_night_texture = cast(moderngl.Uniform, self.texture_prog["u_night_texture"])
-        self.u_night_texture.value = 1 # read night texture from position 1
+        self.u_night_texture.value = cfg.TEXTURE_UNIT_NIGHT
         self.u_clouds_texture = cast(moderngl.Uniform, self.texture_prog["u_clouds_texture"])
-        self.u_clouds_texture.value = 2 # read clouds texture from position 2
+        self.u_clouds_texture.value = cfg.TEXTURE_UNIT_CLOUDS
         self.u_has_night = cast(moderngl.Uniform, self.texture_prog["u_has_night"])
         self.u_clouds_on = cast(moderngl.Uniform, self.texture_prog["u_clouds_on"])
+        self.u_shadow_ring_texture = cast(moderngl.Uniform, self.texture_prog["u_ring_texture"])
+        self.u_shadow_ring_texture.value = cfg.TEXTURE_UNIT_RING
+        self.u_shadow_on = cast(moderngl.Uniform, self.texture_prog["u_ring_shadow_on"])
+        self.u_shadow_normal = cast(moderngl.Uniform, self.texture_prog["u_ring_normal"])
+        self.u_shadow_radii = cast(moderngl.Uniform, self.texture_prog["u_ring_radii"])
+        self.u_ring_mvp = cast(moderngl.Uniform, self.ring_prog["u_mvp"])
+        self.u_normal = cast(moderngl.Uniform, self.ring_prog["u_normal"])
+        self.u_ring_light_dir = cast(moderngl.Uniform, self.ring_prog["u_light_dir"])
+        self.u_ring_texture = cast(moderngl.Uniform, self.ring_prog["u_texture"])
+        self.u_ring_texture.value = cfg.TEXTURE_UNIT_MAIN
+        self.u_ring_model = cast(moderngl.Uniform, self.ring_prog["u_model"])
+        self.u_sphere_radius = cast(moderngl.Uniform, self.ring_prog["u_sphere_radius"])
 
-    def _init_textures(self, vertices, textures) -> None:
+    def _init_textures(self, vertices: np.ndarray, textures: np.ndarray) -> None:
+        """Create the textured sphere vertex array and load all body textures."""
         self.texture_idx = np.zeros(self.num_bodies, dtype=int)
         texture_input = np.hstack((vertices, textures))
         self.texture_vbo = self.ctx.buffer(texture_input.tobytes())
@@ -134,73 +86,63 @@ class Sphere(mglw.WindowConfig):
             index_element_size=4 # Bytes per entry in index buffer
         )
 
-        path = Path(__file__).parent / "assets" / "textures" / "bodies"
         self.textures: list[list[moderngl.Texture]] = []
         for name in names:
-            name = name.lower().replace("+", "_")
-            dir_name = path / name
-            body_textures = []
-            for variant in sorted(dir_name.glob("*.jpg")):
-                file_name = dir_name / variant
-                img = Image.open(file_name).convert("RGB")
-                img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM) # OpenGL expects Bottom img row first
+            dir_name = cfg.BODY_TEXTURE_DIR / name.lower().replace("+", "_")
+            self.textures.append([load_texture(self.ctx, file) for file in sorted(dir_name.glob("*.jpg"))])
 
-                texture = self.ctx.texture(img.size, 3, img.tobytes())
-                texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-                texture.build_mipmaps()
-                body_textures.append(texture)
-            self.textures.append(body_textures)
+    def _init_ring(self) -> None:
+        """Upload the ring mesh and load the RGBA ring texture."""
+        ring_input, indices = calc_ring(cfg.RING_INNER, cfg.RING_SEGMENTS)
+        self.ring_vbo = self.ctx.buffer(ring_input.tobytes())
+        self.ring_ibo = self.ctx.buffer(indices.tobytes())
+        self.ring_vao = self.ctx.vertex_array(
+            self.ring_prog,
+            [(self.ring_vbo, "3f 2f", "in_pos", "in_uv")],
+            index_buffer=self.ring_ibo,
+            index_element_size=4
+        )
+        self.ring_texture = load_texture(self.ctx, cfg.RING_TEXTURE_PATH)
 
-    def _init_earth_overlay(self):
-        img = Image.open(Path(__file__).parent / "assets" / "textures" / "overlays" / "earth_clouds.jpg").convert("RGB")
-        img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-        texture = self.ctx.texture(img.size, 3, img.tobytes())
-        texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-        texture.build_mipmaps()
-        self.earth_cloud_texture = texture
+    def _init_earth_overlay(self) -> None:
+        """Load the Earth cloud texture."""
+        self.earth_cloud_texture = load_texture(self.ctx, cfg.CLOUD_TEXTURE_PATH, components=3)
 
     def _create_mesh(self) -> None:
         """Upload the sphere mesh to the GPU and describe its layout in a vertex array."""
-        vertices, indices, textures = calc_points(32, 64)
-
-        self.vbo = self.ctx.buffer(vertices.tobytes()) # Vertex Buffer Object: Reserve storage in VRAM
+        vertices, indices, textures = calc_points(cfg.SPHERE_STACKS, cfg.SPHERE_SLICES)
         self.ibo = self.ctx.buffer(indices.tobytes()) # Index Buffer Object: Indices that reference vertices
-        self.vao = self.ctx.vertex_array( # Vertex Array Object: Stores information about how an object is built
-            self.prog,
-            [(self.vbo, "3f", "in_pos")],
-            index_buffer=self.ibo,
-            index_element_size=4
-        )
 
         self._init_textures(vertices, textures)
         self._init_earth_overlay()
+        self._init_ring()
 
     def _init_camera(self) -> None:
         """Set the start state of the orbit camera (angles in radians, distance in AU)."""
-        self.az = np.deg2rad(33.69)
-        self.el = np.deg2rad(47.97)
-        self.dist = 10.
-        self.max_dist = 100. # Cap scrolling out
-        self.near = 0.01 * self.dist
-        self.far = 200.
+        self.az = np.deg2rad(cfg.CAMERA_START_AZIMUTH)
+        self.el = np.deg2rad(cfg.CAMERA_START_ELEVATION)
+        self.dist = cfg.CAMERA_START_DIST
+        self.max_dist = cfg.CAMERA_MAX_DIST # Cap scrolling out
+        self.near = cfg.CAMERA_NEAR_FACTOR * self.dist
+        self.far = cfg.CAMERA_FAR
         self.follow: int | None = None # Index of the body the camera follows
-        self.up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        self.up = np.array(cfg.CAMERA_UP, dtype=np.float32)
 
     def _init_bodies(self) -> None:
         """Set the start state of the simulation: positions, velocities, accelerations and time stepping."""
         self.pos, self.vel = correct_center_of_mass(positions, velocities, masses)
         _differences = calc_differences(self.pos)
         self.acc = calc_accelerations(_differences, masses)
-        self.dt = 1. # in days
-        self.time_factor = 60. # days per second
+        self.dt = cfg.DT # in days
+        self.time_factor = cfg.TIME_FACTOR # days per second
         self.dt_budget = 0.
-        self.max_steps = 200 # max steps per image
+        self.max_steps = cfg.MAX_STEPS_PER_FRAME # max steps per image
         self.real_radii_mode = False
         self.radii = display_radii
-        self.spin_angles = np.zeros((9,))
-        self.max_spin_rate = 360.0 # degrees per second
-        self.cap_spin = True
-        self.inspect_spin_rate = 20.0  # degrees per second, same for every body
+        self.spin_angles = np.zeros(self.num_bodies)
+        self.max_spin_rate = cfg.MAX_SPIN_RATE # degrees per second
+        self.cap_spin = cfg.SPIN_CAP_ENABLED
+        self.inspect_spin_rate = cfg.INSPECT_SPIN_RATE  # degrees per second, same for every body
         self.inspect_mode = False
         self.speed = self.time_factor
         self.clouds_on = False
@@ -237,13 +179,13 @@ class Sphere(mglw.WindowConfig):
 
     def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int) -> None:
         """Rotate the camera around the target while a mouse button is held."""
-        self.az += dx * 0.01
-        self.el += dy * 0.01
-        self.el = max(np.deg2rad(-89), min(self.el, np.deg2rad(89)))
+        self.az += dx * cfg.MOUSE_SENSITIVITY
+        self.el += dy * cfg.MOUSE_SENSITIVITY
+        self.el = max(np.deg2rad(-cfg.CAMERA_MAX_ELEVATION), min(self.el, np.deg2rad(cfg.CAMERA_MAX_ELEVATION)))
 
     def on_mouse_scroll_event(self, x_offset: float, y_offset: float) -> None:
         """Zoom: every mouse wheel notch changes the distance to the target by 10 percent."""
-        self.dist *= 1.1 ** y_offset
+        self.dist *= cfg.ZOOM_STEP ** y_offset
 
     def on_key_event(self, key: int, action: Any, modifiers: Any) -> None:
         """Keys 1-9 select the body the camera follows, 0 goes back to the origin, R toggles real and exaggerated radii."""
@@ -300,14 +242,48 @@ class Sphere(mglw.WindowConfig):
         self.V = look_at(eye, target, self.up) # Move Camera to origin and rotate so that it looks along -z
 
         aspect = self.wnd.aspect_ratio
-        self.near = 0.01 * self.dist
-        self.P = perspective(60, aspect, self.near, self.far) # Project Objects so that more distant ones look smaller
+        self.near = cfg.CAMERA_NEAR_FACTOR * self.dist
+        self.P = perspective(cfg.CAMERA_FOV, aspect, self.near, self.far) # Project Objects so that more distant ones look smaller
+
+    def _calc_light_dirs(self):
+        d = self.pos[0] - self.pos
+        norms = np.linalg.norm(d, axis=1, keepdims=True)
+        return np.divide(d, norms, out=np.zeros_like(d), where=norms > 0)
+
+    def _ring_normal(self) -> np.ndarray:
+        """Return the normal of the ring plane in world space as a float32 vector (the ring is tilted like its body)."""
+        Rx = rotation_x(np.deg2rad(axial_tilts[self.ring_body]))
+        return (Rx @ np.array([0, 0, 1, 0], dtype=np.float32))[:3].astype(np.float32)
+
+    def _draw_ring(self) -> None:
+        """Draw the Saturn ring with alpha blending, after all opaque objects."""
+        light_dirs = self._calc_light_dirs()
+        i = self.ring_body
+
+        Rx = rotation_x(np.deg2rad(axial_tilts[i]))
+        M = calc_translation(self.pos[i]) @ Rx @ calc_scaling(cfg.RING_SCALE * self.radii[i])
+        mvp = self.P @ self.V @ M
+        self.u_ring_mvp.write(mvp.T.tobytes())
+        self.u_ring_model.write(M.T.tobytes())
+        self.u_sphere_radius.write(self.radii[i].astype(np.float32).tobytes())
+
+        self.u_normal.write(self._ring_normal().tobytes())
+        self.u_ring_light_dir.write(light_dirs[i].astype(np.float32).tobytes())
+
+        self.ring_texture.use(location=cfg.TEXTURE_UNIT_MAIN)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self.ring_vao.render()
+        self.ctx.disable(moderngl.BLEND)
 
     def _draw_bodies(self) -> None:
         """Draw every body as the shared sphere mesh with its own model matrix and colour."""
-        d = self.pos[0] - self.pos
-        norms = np.linalg.norm(d, axis=1, keepdims=True)
-        light_dirs = np.divide(d, norms, out=np.zeros_like(d), where=norms > 0)
+        light_dirs = self._calc_light_dirs()
+
+        ring_outer = cfg.RING_SCALE * self.radii[self.ring_body]
+        self.u_shadow_radii.value = (float(cfg.RING_INNER * ring_outer), float(ring_outer))
+        self.u_shadow_normal.write(self._ring_normal().tobytes())
+        self.ring_texture.use(location=cfg.TEXTURE_UNIT_RING)
 
         for i in range(self.num_bodies):
 
@@ -323,9 +299,10 @@ class Sphere(mglw.WindowConfig):
             self.u_lit.value = float(i != 0)
             self.u_has_night.value = float(day_night_textures[i])
             self.u_clouds_on.value = float(day_night_textures[i] and self.clouds_on)
-            self.textures[i][self.texture_idx[i]].use(location=0) # write texture to position 0 on GPU
-            self.textures[i][-1].use(location=1)
-            self.earth_cloud_texture.use(location=2)
+            self.u_shadow_on.value = float(i == self.ring_body)
+            self.textures[i][self.texture_idx[i]].use(location=cfg.TEXTURE_UNIT_MAIN)
+            self.textures[i][-1].use(location=cfg.TEXTURE_UNIT_NIGHT)
+            self.earth_cloud_texture.use(location=cfg.TEXTURE_UNIT_CLOUDS)
 
             self.texture_vao.render()
 
@@ -344,8 +321,7 @@ class Sphere(mglw.WindowConfig):
 
     def on_render(self, time: float, frame_time: float) -> None:
         """Draw one frame: advance the simulation, update the camera and draw all bodies."""
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.clear(0.1, 0.1, 0.1, 1.0)
+        self.ctx.clear(*cfg.BACKGROUND_COLOR)
 
         self.inspect_mode = self.wnd.is_key_pressed(self.wnd.keys.SPACE)
         self.speed = 0.0 if self.inspect_mode else self.time_factor
@@ -355,3 +331,4 @@ class Sphere(mglw.WindowConfig):
         self._update_camera()
         self._draw_bodies()
         self._draw_trails()
+        self._draw_ring()
