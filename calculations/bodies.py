@@ -127,3 +127,27 @@ axial_tilts: NDArray[np.float64] = np.array([
     97.8,       # Uranus
     28.3,       # Neptune
 ], dtype=np.float64)
+
+texture_switchable: NDArray[np.bool_] = np.array([
+    False,      # Sun
+    False,      # Mercury
+    True,       # Venus
+    False,      # Earth+Moon
+    False,      # Mars
+    False,      # Jupiter
+    False,      # Saturn
+    False,      # Uranus
+    False,      # Neptune
+], dtype=bool)
+
+day_night_textures: NDArray[np.bool_] = np.array([
+    False,      # Sun
+    False,      # Mercury
+    False,      # Venus
+    True,       # Earth+Moon
+    False,      # Mars
+    False,      # Jupiter
+    False,      # Saturn
+    False,      # Uranus
+    False,      # Neptune
+], dtype=bool)

@@ -7,7 +7,7 @@ import moderngl
 import moderngl_window as mglw
 
 from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, rotation_x, rotation_z
-from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii, orbital_periods, rotation_periods, axial_tilts
+from calculations.bodies import masses, positions, velocities, body_colors, display_radii, names, real_radii, orbital_periods, rotation_periods, axial_tilts, texture_switchable, day_night_textures
 from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
 
 
@@ -78,16 +78,30 @@ class Sphere(mglw.WindowConfig):
             fragment_shader="""
                 #version 330
                 in vec2 i_uv;
-                uniform sampler2D u_texture;
                 in vec3 v_normal;
+                uniform sampler2D u_texture;
+                uniform sampler2D u_night_texture;
+                uniform sampler2D u_clouds_texture;
                 uniform vec3 u_light_dir;
                 uniform float u_lit; // is illuminated (1) or glows on its own (0)
+                uniform float u_has_night; // earth night side (1) or day side (0)
+                uniform float u_clouds_on;
                 out vec4 out_color;
                 void main() {
                     vec3 n = normalize(v_normal);
                     float diffuse = max(dot(n, u_light_dir), 0.0);
-                    float light = mix(1.0, 0.1 + 0.9 * diffuse, u_lit);
-                    out_color = texture(u_texture, i_uv) * light;
+
+                    vec3 day = texture(u_texture, i_uv).rgb;
+                    vec3 night = texture(u_night_texture, i_uv).rgb;
+                    float cloud = texture(u_clouds_texture, i_uv).r * u_clouds_on;
+                    day = mix(day, vec3(1.0), cloud);
+                    night = night * (1.0 - cloud);
+
+                    vec3 lit = day * (0.1 + 0.9 * diffuse);
+                    float day_amount = smoothstep(0.0, 0.25, diffuse);
+                    vec3 earth = mix(night, lit, day_amount);
+                    vec3 surface = mix(lit, earth, u_has_night);
+                    out_color = vec4(mix(day, surface, u_lit), 1.0);
                 }
             """
         )
@@ -102,6 +116,12 @@ class Sphere(mglw.WindowConfig):
         self.u_model = cast(moderngl.Uniform, self.texture_prog["u_model"])
         self.u_light_dir = cast(moderngl.Uniform, self.texture_prog["u_light_dir"])
         self.u_lit = cast(moderngl.Uniform, self.texture_prog["u_lit"])
+        self.u_night_texture = cast(moderngl.Uniform, self.texture_prog["u_night_texture"])
+        self.u_night_texture.value = 1 # read night texture from position 1
+        self.u_clouds_texture = cast(moderngl.Uniform, self.texture_prog["u_clouds_texture"])
+        self.u_clouds_texture.value = 2 # read clouds texture from position 2
+        self.u_has_night = cast(moderngl.Uniform, self.texture_prog["u_has_night"])
+        self.u_clouds_on = cast(moderngl.Uniform, self.texture_prog["u_clouds_on"])
 
     def _init_textures(self, vertices, textures) -> None:
         self.texture_idx = np.zeros(self.num_bodies, dtype=int)
@@ -131,6 +151,14 @@ class Sphere(mglw.WindowConfig):
                 body_textures.append(texture)
             self.textures.append(body_textures)
 
+    def _init_earth_overlay(self):
+        img = Image.open(Path(__file__).parent / "assets" / "textures" / "overlays" / "earth_clouds.jpg").convert("RGB")
+        img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        texture = self.ctx.texture(img.size, 3, img.tobytes())
+        texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        texture.build_mipmaps()
+        self.earth_cloud_texture = texture
+
     def _create_mesh(self) -> None:
         """Upload the sphere mesh to the GPU and describe its layout in a vertex array."""
         vertices, indices, textures = calc_points(32, 64)
@@ -145,6 +173,7 @@ class Sphere(mglw.WindowConfig):
         )
 
         self._init_textures(vertices, textures)
+        self._init_earth_overlay()
 
     def _init_camera(self) -> None:
         """Set the start state of the orbit camera (angles in radians, distance in AU)."""
@@ -174,6 +203,7 @@ class Sphere(mglw.WindowConfig):
         self.inspect_spin_rate = 20.0  # degrees per second, same for every body
         self.inspect_mode = False
         self.speed = self.time_factor
+        self.clouds_on = False
 
     def _init_trail(self) -> None:
         """Create the ring buffers, sampling timers and GPU buffers for the orbit trails of all bodies."""
@@ -225,8 +255,10 @@ class Sphere(mglw.WindowConfig):
             self.real_radii_mode = not self.real_radii_mode
         if key == self.wnd.keys.C:
             self.cap_spin = not self.cap_spin
-        if key == self.wnd.keys.T and self.follow is not None:
+        if key == self.wnd.keys.T and self.follow is not None and texture_switchable[self.follow]:
             self.texture_idx[self.follow] = (self.texture_idx[self.follow]+1) % len(self.textures[self.follow])
+        if key == self.wnd.keys.W:
+            self.clouds_on = not self.clouds_on
 
     def _advance_simulation(self, frame_time: float) -> None:
         """Run as many fixed-size Verlet steps as the time budget of this frame allows."""
@@ -273,24 +305,27 @@ class Sphere(mglw.WindowConfig):
 
     def _draw_bodies(self) -> None:
         """Draw every body as the shared sphere mesh with its own model matrix and colour."""
+        d = self.pos[0] - self.pos
+        norms = np.linalg.norm(d, axis=1, keepdims=True)
+        light_dirs = np.divide(d, norms, out=np.zeros_like(d), where=norms > 0)
+
         for i in range(self.num_bodies):
+
             Rx = rotation_x(np.deg2rad(axial_tilts[i]))
             Rz = rotation_z(self.spin_angles[i])
             M = calc_translation(self.pos[i]) @ Rx @ Rz @ calc_scaling(self.radii[i])
 
             mvp = self.P @ self.V @ M
             self.u_tex_mvp.write(mvp.T.tobytes())
-            self.textures[i][self.texture_idx[i]].use(location=0) # write texture to position 0 on GPU
             self.u_model.write(M.T.tobytes())
 
-            d = self.pos[0] - self.pos[i]
-            if i != 0:
-                self.u_lit.value = 1.0
-                light_dir = d / np.linalg.norm(d)
-                self.u_light_dir.write(np.array(light_dir, dtype=np.float32).tobytes())
-
-            else:
-                self.u_lit.value = 0.0
+            self.u_light_dir.write(light_dirs[i].astype(np.float32).tobytes())
+            self.u_lit.value = float(i != 0)
+            self.u_has_night.value = float(day_night_textures[i])
+            self.u_clouds_on.value = float(day_night_textures[i] and self.clouds_on)
+            self.textures[i][self.texture_idx[i]].use(location=0) # write texture to position 0 on GPU
+            self.textures[i][-1].use(location=1)
+            self.earth_cloud_texture.use(location=2)
 
             self.texture_vao.render()
 
