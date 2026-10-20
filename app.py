@@ -6,7 +6,7 @@ import moderngl_window as mglw
 
 import config as cfg
 from utils import load_texture, load_program
-from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, rotation_x, rotation_z, calc_ring
+from calculations.calc_graphics import look_at, perspective, calc_points, calc_translation, calc_scaling, rotation_x, rotation_z, calc_ring, calc_ecliptic_to_galactic
 from calculations.calc_physics import correct_center_of_mass, step_velocity_verlet, calc_accelerations, calc_differences
 from calculations.bodies import (masses, positions, velocities, body_colors,
                                 display_radii, names, real_radii, orbital_periods,
@@ -41,38 +41,54 @@ class SolarSystemApp(mglw.WindowConfig):
 
     def _create_program(self) -> None:
         """Compile the colour program (trails) and the texture program (bodies and ring) from the shaders folder."""
-        self.prog = load_program(self.ctx, "color")
+        self.color_prog = load_program(self.ctx, "color")
         self.texture_prog = load_program(self.ctx, "texture")
         self.ring_prog = load_program(self.ctx, "ring")
+        self.sky_prog = load_program(self.ctx, "sky")
 
     def _init_uniforms(self) -> None:
-        """Look up the shader uniforms once and keep typed references to them."""
-        self.u_mvp = cast(moderngl.Uniform, self.prog["u_mvp"])
-        self.u_color = cast(moderngl.Uniform, self.prog["u_color"])
-        self.u_tex_mvp = cast(moderngl.Uniform, self.texture_prog["u_mvp"])
-        self.u_texture = cast(moderngl.Uniform, self.texture_prog["u_texture"])
-        self.u_texture.value = cfg.TEXTURE_UNIT_MAIN
-        self.u_model = cast(moderngl.Uniform, self.texture_prog["u_model"])
-        self.u_light_dir = cast(moderngl.Uniform, self.texture_prog["u_light_dir"])
-        self.u_lit = cast(moderngl.Uniform, self.texture_prog["u_lit"])
-        self.u_night_texture = cast(moderngl.Uniform, self.texture_prog["u_night_texture"])
-        self.u_night_texture.value = cfg.TEXTURE_UNIT_NIGHT
-        self.u_clouds_texture = cast(moderngl.Uniform, self.texture_prog["u_clouds_texture"])
-        self.u_clouds_texture.value = cfg.TEXTURE_UNIT_CLOUDS
-        self.u_has_night = cast(moderngl.Uniform, self.texture_prog["u_has_night"])
-        self.u_clouds_on = cast(moderngl.Uniform, self.texture_prog["u_clouds_on"])
-        self.u_shadow_ring_texture = cast(moderngl.Uniform, self.texture_prog["u_ring_texture"])
-        self.u_shadow_ring_texture.value = cfg.TEXTURE_UNIT_RING
-        self.u_shadow_on = cast(moderngl.Uniform, self.texture_prog["u_ring_shadow_on"])
-        self.u_shadow_normal = cast(moderngl.Uniform, self.texture_prog["u_ring_normal"])
-        self.u_shadow_radii = cast(moderngl.Uniform, self.texture_prog["u_ring_radii"])
-        self.u_ring_mvp = cast(moderngl.Uniform, self.ring_prog["u_mvp"])
-        self.u_normal = cast(moderngl.Uniform, self.ring_prog["u_normal"])
-        self.u_ring_light_dir = cast(moderngl.Uniform, self.ring_prog["u_light_dir"])
-        self.u_ring_texture = cast(moderngl.Uniform, self.ring_prog["u_texture"])
-        self.u_ring_texture.value = cfg.TEXTURE_UNIT_MAIN
-        self.u_ring_model = cast(moderngl.Uniform, self.ring_prog["u_model"])
-        self.u_sphere_radius = cast(moderngl.Uniform, self.ring_prog["u_sphere_radius"])
+        """Look up the shader uniforms once per program and set the ones that never change."""
+        self._init_color_uniforms()
+        self._init_texture_uniforms()
+        self._init_ring_uniforms()
+        self._init_sky_uniforms()
+
+    def _init_color_uniforms(self) -> None:
+        """Uniforms of the colour program (orbit trails)."""
+        self.color_mvp = cast(moderngl.Uniform, self.color_prog["u_mvp"])
+        self.color_rgb = cast(moderngl.Uniform, self.color_prog["u_color"])
+
+    def _init_texture_uniforms(self) -> None:
+        """Uniforms of the texture program (bodies); the texture slots never change."""
+        self.texture_prog["u_texture"] = cfg.TEXTURE_UNIT_MAIN
+        self.texture_prog["u_night_texture"] = cfg.TEXTURE_UNIT_NIGHT
+        self.texture_prog["u_clouds_texture"] = cfg.TEXTURE_UNIT_CLOUDS
+        self.texture_prog["u_ring_texture"] = cfg.TEXTURE_UNIT_RING
+        self.tex_mvp = cast(moderngl.Uniform, self.texture_prog["u_mvp"])
+        self.tex_model = cast(moderngl.Uniform, self.texture_prog["u_model"])
+        self.tex_light_dir = cast(moderngl.Uniform, self.texture_prog["u_light_dir"])
+        self.tex_lit = cast(moderngl.Uniform, self.texture_prog["u_lit"])
+        self.tex_has_night = cast(moderngl.Uniform, self.texture_prog["u_has_night"])
+        self.tex_clouds_on = cast(moderngl.Uniform, self.texture_prog["u_clouds_on"])
+        self.tex_ring_shadow_on = cast(moderngl.Uniform, self.texture_prog["u_ring_shadow_on"])
+        self.tex_ring_normal = cast(moderngl.Uniform, self.texture_prog["u_ring_normal"])
+        self.tex_ring_radii = cast(moderngl.Uniform, self.texture_prog["u_ring_radii"])
+
+    def _init_ring_uniforms(self) -> None:
+        """Uniforms of the ring program."""
+        self.ring_prog["u_texture"] = cfg.TEXTURE_UNIT_MAIN
+        self.ring_mvp = cast(moderngl.Uniform, self.ring_prog["u_mvp"])
+        self.ring_model = cast(moderngl.Uniform, self.ring_prog["u_model"])
+        self.ring_normal = cast(moderngl.Uniform, self.ring_prog["u_normal"])
+        self.ring_light_dir = cast(moderngl.Uniform, self.ring_prog["u_light_dir"])
+        self.ring_sphere_radius = cast(moderngl.Uniform, self.ring_prog["u_sphere_radius"])
+
+    def _init_sky_uniforms(self) -> None:
+        """Uniforms of the sky program; the brightness and the ecliptic to galactic rotation never change."""
+        self.sky_prog["u_sky"] = cfg.TEXTURE_UNIT_MAIN
+        self.sky_prog["u_brightness"] = cfg.SKY_BRIGHTNESS
+        cast(moderngl.Uniform, self.sky_prog["u_ecl_to_gal"]).write(calc_ecliptic_to_galactic().T.tobytes())
+        self.sky_mvp = cast(moderngl.Uniform, self.sky_prog["u_sky_mvp"])
 
     def _init_textures(self, vertices: np.ndarray, textures: np.ndarray) -> None:
         """Create the textured sphere vertex array and load all body textures."""
@@ -89,7 +105,21 @@ class SolarSystemApp(mglw.WindowConfig):
         self.textures: list[list[moderngl.Texture]] = []
         for name in names:
             dir_name = cfg.BODY_TEXTURE_DIR / name.lower().replace("+", "_")
-            self.textures.append([load_texture(self.ctx, file) for file in sorted(dir_name.glob("*.jpg"))])
+            self.textures.append([load_texture(self.ctx, file, components=3) for file in sorted(dir_name.glob("*.jpg"))])
+
+    def _init_sky(self) -> None:
+        """Create the sky sphere (positions only) and load the sky map."""
+        vertices, indices, _ = calc_points(cfg.SPHERE_STACKS, cfg.SPHERE_SLICES)
+        self.sky_texture = load_texture(self.ctx, cfg.SKY_TEXTURE_PATH, components=3)
+
+        self.sky_vbo = self.ctx.buffer(vertices.tobytes())
+        self.sky_ibo = self.ctx.buffer(indices.tobytes())
+        self.sky_vao = self.ctx.vertex_array(
+            self.sky_prog,
+            [(self.sky_vbo, "3f", "in_pos")],
+            index_buffer=self.sky_ibo,
+            index_element_size=4
+        )
 
     def _init_ring(self) -> None:
         """Upload the ring mesh and load the RGBA ring texture."""
@@ -116,6 +146,7 @@ class SolarSystemApp(mglw.WindowConfig):
         self._init_textures(vertices, textures)
         self._init_earth_overlay()
         self._init_ring()
+        self._init_sky()
 
     def _init_camera(self) -> None:
         """Set the start state of the orbit camera (angles in radians, distance in AU)."""
@@ -161,7 +192,7 @@ class SolarSystemApp(mglw.WindowConfig):
             for _ in range(self.num_bodies)
         ]
         self.trail_vaos = [
-            self.ctx.vertex_array(self.prog, [(vbo, "3f", "in_pos")])
+            self.ctx.vertex_array(self.color_prog, [(vbo, "3f", "in_pos")])
             for vbo in self.trail_vbos
         ]
 
@@ -263,12 +294,12 @@ class SolarSystemApp(mglw.WindowConfig):
         Rx = rotation_x(np.deg2rad(axial_tilts[i]))
         M = calc_translation(self.pos[i]) @ Rx @ calc_scaling(cfg.RING_SCALE * self.radii[i])
         mvp = self.P @ self.V @ M
-        self.u_ring_mvp.write(mvp.T.tobytes())
-        self.u_ring_model.write(M.T.tobytes())
-        self.u_sphere_radius.write(self.radii[i].astype(np.float32).tobytes())
+        self.ring_mvp.write(mvp.T.tobytes())
+        self.ring_model.write(M.T.tobytes())
+        self.ring_sphere_radius.write(self.radii[i].astype(np.float32).tobytes())
 
-        self.u_normal.write(self._ring_normal().tobytes())
-        self.u_ring_light_dir.write(light_dirs[i].astype(np.float32).tobytes())
+        self.ring_normal.write(self._ring_normal().tobytes())
+        self.ring_light_dir.write(light_dirs[i].astype(np.float32).tobytes())
 
         self.ring_texture.use(location=cfg.TEXTURE_UNIT_MAIN)
         self.ctx.enable(moderngl.BLEND)
@@ -276,13 +307,23 @@ class SolarSystemApp(mglw.WindowConfig):
         self.ring_vao.render()
         self.ctx.disable(moderngl.BLEND)
 
+    def _draw_sky(self) -> None:
+        """Draw the sky first: view matrix without translation, no depth test."""
+        view_rot = self.V.copy()
+        view_rot[:3, 3] = 0
+        self.sky_mvp.write((self.P @ view_rot).T.tobytes())
+        self.sky_texture.use(location=cfg.TEXTURE_UNIT_MAIN)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.sky_vao.render()
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
     def _draw_bodies(self) -> None:
         """Draw every body as the shared sphere mesh with its own model matrix and colour."""
         light_dirs = self._calc_light_dirs()
 
         ring_outer = cfg.RING_SCALE * self.radii[self.ring_body]
-        self.u_shadow_radii.value = (float(cfg.RING_INNER * ring_outer), float(ring_outer))
-        self.u_shadow_normal.write(self._ring_normal().tobytes())
+        self.tex_ring_radii.value = (float(cfg.RING_INNER * ring_outer), float(ring_outer))
+        self.tex_ring_normal.write(self._ring_normal().tobytes())
         self.ring_texture.use(location=cfg.TEXTURE_UNIT_RING)
 
         for i in range(self.num_bodies):
@@ -292,14 +333,14 @@ class SolarSystemApp(mglw.WindowConfig):
             M = calc_translation(self.pos[i]) @ Rx @ Rz @ calc_scaling(self.radii[i])
 
             mvp = self.P @ self.V @ M
-            self.u_tex_mvp.write(mvp.T.tobytes())
-            self.u_model.write(M.T.tobytes())
+            self.tex_mvp.write(mvp.T.tobytes())
+            self.tex_model.write(M.T.tobytes())
 
-            self.u_light_dir.write(light_dirs[i].astype(np.float32).tobytes())
-            self.u_lit.value = float(i != 0)
-            self.u_has_night.value = float(day_night_textures[i])
-            self.u_clouds_on.value = float(day_night_textures[i] and self.clouds_on)
-            self.u_shadow_on.value = float(i == self.ring_body)
+            self.tex_light_dir.write(light_dirs[i].astype(np.float32).tobytes())
+            self.tex_lit.value = float(i != 0)
+            self.tex_has_night.value = float(day_night_textures[i])
+            self.tex_clouds_on.value = float(day_night_textures[i] and self.clouds_on)
+            self.tex_ring_shadow_on.value = float(i == self.ring_body)
             self.textures[i][self.texture_idx[i]].use(location=cfg.TEXTURE_UNIT_MAIN)
             self.textures[i][-1].use(location=cfg.TEXTURE_UNIT_NIGHT)
             self.earth_cloud_texture.use(location=cfg.TEXTURE_UNIT_CLOUDS)
@@ -309,11 +350,11 @@ class SolarSystemApp(mglw.WindowConfig):
     def _draw_trails(self) -> None:
         """Draw the orbit trail of every body except the Sun as a line strip in the colour of the body."""
         vp = self.P @ self.V
-        self.u_mvp.write(vp.T.tobytes())
+        self.color_mvp.write(vp.T.tobytes())
         for i in range(1, self.num_bodies):
             point = self._ordered_points(i)
             self.trail_vbos[i].write(point)
-            self.u_color.write(body_colors[i])
+            self.color_rgb.write(body_colors[i])
 
             num_points = len(point)
             if num_points >= 2:
@@ -329,6 +370,7 @@ class SolarSystemApp(mglw.WindowConfig):
         self._advance_simulation(frame_time)
         self._update_spins(frame_time)
         self._update_camera()
+        self._draw_sky()
         self._draw_bodies()
         self._draw_trails()
         self._draw_ring()

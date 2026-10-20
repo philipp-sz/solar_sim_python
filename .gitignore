@@ -4,3 +4,5 @@ CLAUDE.md
 __pycache__/
 NOTES.md
 PLAN.md
+# 8K textures (about 62 MiB), not in the repository: see assets/textures/CREDITS.txt for the source and the file list
+assets/textures_8k/

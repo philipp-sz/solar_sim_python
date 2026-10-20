@@ -1,3 +1,22 @@
 Textures: Solar System Scope (https://www.solarsystemscope.com/textures),
 licensed under Creative Commons Attribution 4.0 (CC BY 4.0), based on NASA imagery.
 Check the license terms and the required attribution wording on the source page.
+
+8K textures (optional, NOT in the repository, ignored by git): folder assets/textures_8k/ with the same structure as assets/textures/.
+Switch with TEXTURE_QUALITY = "8k" or "2k" in config.py. Source and license as above; the files are downloaded from
+https://www.solarsystemscope.com/textures/download/<file name> and saved as follows (the label "8k" on the site is not always 8192 x 4096):
+
+  bodies/sun/01_surface.jpg           8k_sun.jpg                  (4096 x 2048)
+  bodies/mercury/01_surface.jpg       8k_mercury.jpg              (8192 x 4096)
+  bodies/venus/01_atmosphere.jpg      4k_venus_atmosphere.jpg     (4096 x 2048, no 8K version exists)
+  bodies/venus/02_surface.jpg         8k_venus_surface.jpg        (8192 x 4096)
+  bodies/earth_moon/01_daymap.jpg     8k_earth_daymap.jpg         (8192 x 4096)
+  bodies/earth_moon/02_nightmap.jpg   8k_earth_nightmap.jpg       (8192 x 4096)
+  bodies/mars/01_surface.jpg          8k_mars.jpg                 (8192 x 4096)
+  bodies/jupiter/01_surface.jpg       8k_jupiter.jpg              (4096 x 2048)
+  bodies/saturn/01_surface.jpg        8k_saturn.jpg               (4096 x 2048)
+  bodies/uranus/01_surface.jpg        copy of the 2K file         (no larger version exists)
+  bodies/neptune/01_surface.jpg       copy of the 2K file         (no larger version exists)
+  rings/saturn.png                    8k_saturn_ring_alpha.png    (8192 x 500)
+  overlays/earth_clouds.jpg           8k_earth_clouds.jpg         (8192 x 4096)
+  sky/milky_way.jpg                   8k_stars_milky_way.jpg      (8192 x 4096)

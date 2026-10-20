@@ -5,10 +5,16 @@ from pathlib import Path
 # --- Paths (anchored at this file, so the program works from any working directory) ---
 PROJECT_DIR = Path(__file__).parent
 SHADER_DIR = PROJECT_DIR / "shaders"  # <name>.vert and <name>.frag per GPU program
-TEXTURE_DIR = PROJECT_DIR / "assets" / "textures"
+TEXTURE_QUALITY = "2k"  # "2k" (in the repository) or "8k" (downloaded, assets/textures_8k, not in the repository, see CREDITS.txt)
+TEXTURE_DIRS = {"2k": PROJECT_DIR / "assets" / "textures", "8k": PROJECT_DIR / "assets" / "textures_8k"}
+TEXTURE_DIR = TEXTURE_DIRS[TEXTURE_QUALITY]  # both folders have the same structure
+if not TEXTURE_DIR.is_dir():
+    raise FileNotFoundError(f"TEXTURE_QUALITY is '{TEXTURE_QUALITY}', but {TEXTURE_DIR} does not exist (see assets/textures/CREDITS.txt)")
 BODY_TEXTURE_DIR = TEXTURE_DIR / "bodies"  # one folder per body: <name>/NN_<variant>.jpg
 RING_TEXTURE_PATH = TEXTURE_DIR / "rings" / "saturn.png"
 CLOUD_TEXTURE_PATH = TEXTURE_DIR / "overlays" / "earth_clouds.jpg"
+SKY_TEXTURE_PATH = TEXTURE_DIR / "sky" / "milky_way.jpg"
+SKY_BRIGHTNESS = 1.1  # the 8K map is darker on average than the 2K map
 
 # --- Window ---
 WINDOW_TITLE = "Solar System Simulation"
