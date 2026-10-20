@@ -177,6 +177,8 @@ class SolarSystemApp(mglw.WindowConfig):
         self.inspect_mode = False
         self.speed = self.time_factor
         self.clouds_on = False
+        self.trails_on = True
+        self.paused = False
 
     def _init_trail(self) -> None:
         """Create the ring buffers, sampling timers and GPU buffers for the orbit trails of all bodies."""
@@ -195,6 +197,11 @@ class SolarSystemApp(mglw.WindowConfig):
             self.ctx.vertex_array(self.color_prog, [(vbo, "3f", "in_pos")])
             for vbo in self.trail_vbos
         ]
+
+    def _update_title(self) -> None:
+        """Show the simulated time speed in the window title."""
+        state = "paused" if self.paused else f"{self.time_factor:g} days/s"
+        self.wnd.title = f"{cfg.WINDOW_TITLE} | {state}"
 
     def _add_point(self, i: int, point: np.ndarray) -> None:
         """Store a position in the ring buffer of body i, overwriting its oldest point when the buffer is full."""
@@ -232,6 +239,15 @@ class SolarSystemApp(mglw.WindowConfig):
             self.texture_idx[self.follow] = (self.texture_idx[self.follow]+1) % len(self.textures[self.follow])
         if key == self.wnd.keys.W:
             self.clouds_on = not self.clouds_on
+        if key == self.wnd.keys.O:
+            self.trails_on = not self.trails_on
+        if key == self.wnd.keys.UP:
+            self.time_factor = min(self.time_factor * 2, cfg.TIME_FACTOR_MAX)
+        if key == self.wnd.keys.DOWN:
+            self.time_factor = max(self.time_factor / 2, cfg.TIME_FACTOR_MIN)
+        if key == self.wnd.keys.P:
+            self.paused = not self.paused
+        self._update_title()
 
     def _advance_simulation(self, frame_time: float) -> None:
         """Run as many fixed-size Verlet steps as the time budget of this frame allows."""
@@ -365,12 +381,13 @@ class SolarSystemApp(mglw.WindowConfig):
         self.ctx.clear(*cfg.BACKGROUND_COLOR)
 
         self.inspect_mode = self.wnd.is_key_pressed(self.wnd.keys.SPACE)
-        self.speed = 0.0 if self.inspect_mode else self.time_factor
+        self.speed = 0.0 if self.inspect_mode or self.paused else self.time_factor
 
         self._advance_simulation(frame_time)
         self._update_spins(frame_time)
         self._update_camera()
         self._draw_sky()
         self._draw_bodies()
-        self._draw_trails()
+        if self.trails_on:
+            self._draw_trails()
         self._draw_ring()

@@ -55,7 +55,7 @@ def calc_points(num_stacks: int, num_slices: int) -> tuple[NDArray[np.float32], 
 def calc_ecliptic_to_galactic() -> Matrix:
     """Return the 3x3 rotation matrix that turns ecliptic directions into galactic directions."""
     eps = np.deg2rad(23.4392911)
-    R = np.array([[-0.0548755604, -0.8734370902, -0.4838350155],
+    R = np.array([[-0.0548755604, -0.8734370902, -0.4838350155], # Equatorial-to-Galactic Transformation Matrix
                 [+0.4941094279, -0.4448296300, +0.7469822445],
                 [-0.8676661490, -0.1980763734, +0.4559837762]])
     E = np.array([[1, 0, 0], 

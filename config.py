@@ -54,6 +54,8 @@ DT = 1.0  # days per integration step
 TIME_FACTOR = 60.0  # simulated days per real second
 MAX_STEPS_PER_FRAME = 200  # protects against a frozen frame causing a long queue of steps
 TRAIL_POINTS = 200  # points per orbit trail
+TIME_FACTOR_MIN = 30.0
+TIME_FACTOR_MAX = 1920.0
 
 # --- Rotation ---
 SPIN_CAP_ENABLED = True  # limit the visible rotation speed (avoids aliasing at high time factors)
