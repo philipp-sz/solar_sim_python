@@ -1,6 +1,8 @@
-Textures: Solar System Scope (https://www.solarsystemscope.com/textures),
-licensed under Creative Commons Attribution 4.0 (CC BY 4.0), based on NASA imagery.
-Check the license terms and the required attribution wording on the source page.
+Textures: Solar System Scope (https://www.solarsystemscope.com/textures/),
+licensed under Creative Commons Attribution 4.0 International (CC BY 4.0,
+https://creativecommons.org/licenses/by/4.0/), based on NASA imagery.
+Changes: none to the image content. The program flips the images vertically when it loads them
+and builds mipmaps for drawing; the files are used as downloaded.
 
 8K textures (optional, NOT in the repository, ignored by git): folder assets/textures_8k/ with the same structure as assets/textures/.
 Switch with TEXTURE_QUALITY = "8k" or "2k" in config.py. Source and license as above; the files are downloaded from
